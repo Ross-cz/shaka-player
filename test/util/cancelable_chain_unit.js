@@ -79,11 +79,17 @@ describe('CancelableChain', function() {
     p.catch(fail).then(done);
   });
 
+  it('returns the same promise after being finalized', function() {
+    var p = chain.then(function() { return 1; }).finalize();
+    expect(chain.finalize()).toBe(p);
+  });
+
   describe('cancel', function() {
     var cannedError;
 
     beforeAll(function() {
       cannedError = new shaka.util.Error(
+          shaka.util.Error.Severity.CRITICAL,
           shaka.util.Error.Category.PLAYER,
           shaka.util.Error.Code.LOAD_INTERRUPTED);
     });

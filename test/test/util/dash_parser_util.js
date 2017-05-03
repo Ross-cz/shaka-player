@@ -29,8 +29,10 @@ shaka.test.Dash.makeDashParser = function() {
     retryParameters: retry,
     dash: {
       customScheme: function(node) { return null; },
-      clockSyncUri: ''
-    }
+      clockSyncUri: '',
+      ignoreDrmInfo: false
+    },
+    hls: { defaultTimeOffset: 0 }
   });
   return parser;
 };
@@ -46,7 +48,7 @@ shaka.test.Dash.makeDashParser = function() {
 shaka.test.Dash.verifySegmentIndex = function(
     manifest, references, periodIndex) {
   expect(manifest).toBeTruthy();
-  var stream = manifest.periods[periodIndex].streamSets[0].streams[0];
+  var stream = manifest.periods[periodIndex].variants[0].video;
   expect(stream).toBeTruthy();
   expect(stream.findSegmentPosition).toBeTruthy();
   expect(stream.getSegmentReference).toBeTruthy();
@@ -56,9 +58,9 @@ shaka.test.Dash.verifySegmentIndex = function(
     return;
   }
 
-  var positionBeforeFirst =
-      stream.findSegmentPosition(references[0].startTime - 1);
-  expect(positionBeforeFirst).toBe(null);
+  // Even if the first segment doesn't start at 0, this should return the first
+  // segment.
+  expect(stream.findSegmentPosition(0)).toBe(references[0].position);
 
   for (var i = 0; i < references.length - 1; i++) {
     var expectedRef = references[i];
@@ -70,9 +72,13 @@ shaka.test.Dash.verifySegmentIndex = function(
   }
 
   // Make sure that the references stop at the end.
+  var lastExpectedReference = references[references.length - 1];
   var positionAfterEnd =
-      stream.findSegmentPosition(references[references.length - 1].endTime);
+      stream.findSegmentPosition(lastExpectedReference.endTime);
   expect(positionAfterEnd).toBe(null);
+  var referencePastEnd =
+      stream.getSegmentReference(lastExpectedReference.position + 1);
+  expect(referencePastEnd).toBe(null);
 };
 
 
@@ -85,11 +91,16 @@ shaka.test.Dash.verifySegmentIndex = function(
  */
 shaka.test.Dash.testSegmentIndex = function(done, manifestText, references) {
   var buffer = shaka.util.StringUtils.toUTF8(manifestText);
-  var fakeNetEngine =
-      new shaka.test.FakeNetworkingEngine({'dummy://foo': buffer});
   var dashParser = shaka.test.Dash.makeDashParser();
-  var filterPeriod = function() {};
-  dashParser.start('dummy://foo', fakeNetEngine, filterPeriod, fail, fail)
+  var playerInterface = {
+    networkingEngine:
+        new shaka.test.FakeNetworkingEngine({'dummy://foo': buffer}),
+    filterPeriod: function() {},
+    onTimelineRegionAdded: fail,  // Should not have any EventStream elements.
+    onEvent: fail,
+    onError: fail
+  };
+  dashParser.start('dummy://foo', playerInterface)
       .then(function(manifest) {
         shaka.test.Dash.verifySegmentIndex(manifest, references, 0);
       })
@@ -107,11 +118,16 @@ shaka.test.Dash.testSegmentIndex = function(done, manifestText, references) {
  */
 shaka.test.Dash.testFails = function(done, manifestText, expectedError) {
   var manifestData = shaka.util.StringUtils.toUTF8(manifestText);
-  var fakeNetEngine =
-      new shaka.test.FakeNetworkingEngine({'dummy://foo': manifestData});
   var dashParser = shaka.test.Dash.makeDashParser();
-  var filterPeriod = function() {};
-  dashParser.start('dummy://foo', fakeNetEngine, filterPeriod, fail, fail)
+  var playerInterface = {
+    networkingEngine:
+        new shaka.test.FakeNetworkingEngine({'dummy://foo': manifestData}),
+    filterPeriod: function() {},
+    onTimelineRegionAdded: fail,  // Should not have any EventStream elements.
+    onEvent: fail,
+    onError: fail
+  };
+  dashParser.start('dummy://foo', playerInterface)
       .then(fail)
       .catch(function(error) {
         shaka.test.Util.expectToEqualError(error, expectedError);
@@ -160,14 +176,14 @@ shaka.test.Dash.makeSimpleManifestText =
  * Makes a simple manifest object for jasmine.toEqual; this does not do any
  * checking.  This only constructs one period with the given stream sets.
  *
- * @param {!Array.<shakaExtern.StreamSet>} streamSets
+ * @param {!Array.<shakaExtern.Variant>} variants
  * @return {shakaExtern.Manifest}
  */
-shaka.test.Dash.makeManifestFromStreamSets = function(streamSets) {
+shaka.test.Dash.makeManifestFromVariants = function(variants) {
   return /** @type {shakaExtern.Manifest} */ (jasmine.objectContaining({
     periods: [
       jasmine.objectContaining({
-        streamSets: streamSets
+        variants: variants
       })
     ]
   }));
@@ -187,8 +203,8 @@ shaka.test.Dash.makeManifestFromStreamSets = function(streamSets) {
  */
 shaka.test.Dash.makeManifestFromInit = function(
     uri, startByte, endByte, opt_pto) {
-  return shaka.test.Dash.makeManifestFromStreamSets([jasmine.objectContaining({
-    streams: [jasmine.objectContaining({
+  return shaka.test.Dash.makeManifestFromVariants([jasmine.objectContaining({
+    video: jasmine.objectContaining({
       presentationTimeOffset: (opt_pto || 0),
       createSegmentIndex: jasmine.any(Function),
       findSegmentPosition: jasmine.any(Function),
@@ -196,7 +212,7 @@ shaka.test.Dash.makeManifestFromInit = function(
           // TODO: Change back to checking specific URIs once jasmine is fixed.
           // https://github.com/jasmine/jasmine/issues/1138
           jasmine.any(Function), startByte, endByte)
-    })]
+    })
   })]);
 };
 
@@ -210,7 +226,7 @@ shaka.test.Dash.makeManifestFromInit = function(
  * @return {!Promise}
  */
 shaka.test.Dash.callCreateSegmentIndex = function(manifest) {
-  var stream = manifest.periods[0].streamSets[0].streams[0];
+  var stream = manifest.periods[0].variants[0].video;
   return stream.createSegmentIndex().then(fail).catch(function() {});
 };
 

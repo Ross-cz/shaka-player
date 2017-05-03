@@ -16,30 +16,54 @@
  */
 
 describe('Storage', function() {
+  var originalSupportsStorageEngine;
+  var originalCreateStorageEngine;
   var SegmentReference;
-  var fakeDbEngine;
+  var fakeStorageEngine;
   var storage;
   var player;
   var netEngine;
 
-  beforeEach(function(done) {
+  beforeAll(function() {
     SegmentReference = shaka.media.SegmentReference;
-    fakeDbEngine = new shaka.test.MemoryDBEngine();
+    originalSupportsStorageEngine =
+        shaka.offline.OfflineUtils.supportsStorageEngine;
+    originalCreateStorageEngine =
+        shaka.offline.OfflineUtils.createStorageEngine;
+  });
+
+  afterAll(function() {
+    shaka.offline.OfflineUtils.supportsStorageEngine =
+        originalSupportsStorageEngine;
+    shaka.offline.OfflineUtils.createStorageEngine =
+        originalCreateStorageEngine;
+  });
+
+  beforeEach(function(done) {
+    shaka.offline.OfflineUtils.supportsStorageEngine = function() {
+      return true;
+    };
+
+    fakeStorageEngine = new shaka.test.MemoryDBEngine();
+
+    shaka.offline.OfflineUtils.createStorageEngine = function() {
+      return fakeStorageEngine;
+    };
+
     netEngine = new shaka.test.FakeNetworkingEngine();
 
     // Use a real Player since Storage only uses the configuration and
     // networking engine.  This allows us to use Player.configure in these
     // tests.
-    player = new shaka.Player(createMockVideo(), function(player) {
+    player = new shaka.Player(new shaka.test.FakeVideo(), function(player) {
       player.createNetworkingEngine = function() {
         return netEngine;
       };
     });
 
     storage = new shaka.offline.Storage(player);
-    storage.setDbEngine(fakeDbEngine);
 
-    fakeDbEngine.init(shaka.offline.OfflineUtils.DB_SCHEME)
+    fakeStorageEngine.init(shaka.offline.OfflineUtils.DB_SCHEME)
         .catch(fail)
         .then(done);
   });
@@ -49,6 +73,7 @@ describe('Storage', function() {
   });
 
   it('lists stored manifests', function(done) {
+    var ContentType = shaka.util.ManifestParserUtils.ContentType;
     var manifestDb1 = {
       key: 0,
       originalManifestUri: 'fake:foobar',
@@ -58,23 +83,29 @@ describe('Storage', function() {
         streams: [
           {
             id: 0,
-            contentType: 'video',
+            contentType: ContentType.VIDEO,
             kind: undefined,
             language: '',
             width: 1920,
             height: 1080,
             frameRate: 24,
-            codecs: 'avc1.4d401f'
+            mimeType: 'video/mp4',
+            codecs: 'avc1.4d401f',
+            primary: false,
+            segments: []
           },
           {
             id: 1,
-            contentType: 'audio',
+            contentType: ContentType.AUDIO,
             kind: undefined,
             language: 'en',
             width: null,
             height: null,
             frameRate: undefined,
-            codecs: 'vorbis'
+            mimeType: 'audio/mp4',
+            codecs: 'vorbis',
+            primary: true,
+            segments: []
           }
         ]
       }],
@@ -99,32 +130,22 @@ describe('Storage', function() {
       {
         id: 0,
         active: false,
-        type: 'video',
+        type: 'variant',
         bandwidth: 0,
-        language: '',
+        language: 'en',
         kind: null,
         width: 1920,
         height: 1080,
         frameRate: 24,
-        codecs: 'avc1.4d401f'
-      },
-      {
-        id: 1,
-        active: false,
-        type: 'audio',
-        bandwidth: 0,
-        language: 'en',
-        kind: null,
-        width: null,
-        height: null,
-        frameRate: undefined,
-        codecs: 'vorbis'
+        mimeType: 'video/mp4',
+        primary: true,
+        codecs: 'avc1.4d401f, vorbis'
       }
     ];
     Promise
         .all([
-          fakeDbEngine.insert('manifest', manifestDb1),
-          fakeDbEngine.insert('manifest', manifestDb2)
+          fakeStorageEngine.insert('manifest', manifestDb1),
+          fakeStorageEngine.insert('manifest', manifestDb2)
         ])
         .then(function() {
           return storage.list();
@@ -164,15 +185,13 @@ describe('Storage', function() {
       manifest = new shaka.test.ManifestGenerator()
           .setPresentationDuration(20)
           .addPeriod(0)
-            .addStreamSet('video')
-              .addStream(0).size(100, 200).bandwidth(80)
-            .addStreamSet('audio')
-              .language('en')
-              .addStream(1).bandwidth(80)
+            .addVariant(0).language('en').bandwidth(160)
+              .addVideo(1).size(100, 200).bandwidth(80)
+              .addAudio(2).language('en').bandwidth(80)
           .build();
       // Get the original tracks from the manifest.
-      var getTracks = shaka.util.StreamUtils.getTracks;
-      tracks = getTracks(manifest.periods[0], {});
+      var getVariantTracks = shaka.util.StreamUtils.getVariantTracks;
+      tracks = getVariantTracks(manifest.periods[0], null, null);
       // The expected tracks we get back from the stored version of the content
       // will have 0 for bandwidth, so adjust the tracks list to match.
       tracks.forEach(function(t) { t.bandwidth = 0; });
@@ -189,16 +208,16 @@ describe('Storage', function() {
       stream1Index = new shaka.media.SegmentIndex([]);
       stream2Index = new shaka.media.SegmentIndex([]);
 
-      var stream1 = manifest.periods[0].streamSets[0].streams[0];
+      var stream1 = manifest.periods[0].variants[0].audio;
       stream1.findSegmentPosition = stream1Index.find.bind(stream1Index);
       stream1.getSegmentReference = stream1Index.get.bind(stream1Index);
 
-      var stream2 = manifest.periods[0].streamSets[1].streams[0];
+      var stream2 = manifest.periods[0].variants[0].video;
       stream2.findSegmentPosition = stream2Index.find.bind(stream2Index);
       stream2.getSegmentReference = stream2Index.get.bind(stream2Index);
     });
 
-    afterAll(function() {
+    afterEach(function() {
       shaka.log.warning = originalWarning;
     });
 
@@ -224,12 +243,8 @@ describe('Storage', function() {
       manifest = new shaka.test.ManifestGenerator()
           .setPresentationDuration(20)
           .addPeriod(0)
-            .addStreamSet('audio')
-              .language('en')
-              .addStream(0).bandwidth(80)
-            .addStreamSet('audio')
-              .language('en')
-              .addStream(1).bandwidth(160)
+            .addVariant(0)
+            .addVariant(1)
           .build();
 
       // Store every stream.
@@ -250,13 +265,44 @@ describe('Storage', function() {
           .then(done);
     });
 
+    it('only stores the tracks chosen', function(done) {
+      manifest = new shaka.test.ManifestGenerator()
+          .setPresentationDuration(20)
+          .addPeriod(0)
+            .addVariant(0)
+              .addVideo(1)
+            .addVariant(2)
+              .addVideo(3)
+          .build();
+
+      // Store the first variant.
+      storage.configure({
+        trackSelectionCallback: function(tracks) {
+          return tracks.slice(0, 1);
+        }
+      });
+
+      storage.store('')
+          .then(function(data) {
+            expect(data.offlineUri).toBe('offline:0');
+            return fakeStorageEngine.get('manifest', 0);
+          })
+          .then(function(manifestDb) {
+            expect(manifestDb).toBeTruthy();
+            expect(manifestDb.periods.length).toBe(1);
+            expect(manifestDb.periods[0].streams.length).toBe(1);
+          })
+          .catch(fail)
+          .then(done);
+    });
+
     it('stores offline sessions', function(done) {
       var sessions = ['lorem', 'ipsum'];
       drmEngine.setSessionIds(sessions);
       storage.store('')
           .then(function(data) {
             expect(data.offlineUri).toBe('offline:0');
-            return fakeDbEngine.get('manifest', 0);
+            return fakeStorageEngine.get('manifest', 0);
           })
           .then(function(manifestDb) {
             expect(manifestDb).toBeTruthy();
@@ -278,7 +324,7 @@ describe('Storage', function() {
       storage.store('')
           .then(function(data) {
             expect(data.offlineUri).toBe('offline:0');
-            return fakeDbEngine.get('manifest', 0);
+            return fakeStorageEngine.get('manifest', 0);
           })
           .then(function(manifestDb) {
             expect(manifestDb).toBeTruthy();
@@ -286,6 +332,93 @@ describe('Storage', function() {
           })
           .catch(fail)
           .then(done);
+    });
+
+    it('stores expiration', function(done) {
+      drmEngine.setSessionIds(['abcd']);
+      drmEngine.getExpiration.and.returnValue(1234);
+
+      storage.store('')
+          .then(function(data) {
+            expect(data.offlineUri).toBe('offline:0');
+            return fakeStorageEngine.get('manifest', 0);
+          })
+          .then(function(manifestDb) {
+            expect(manifestDb).toBeTruthy();
+            expect(manifestDb.expiration).toBe(1234);
+          })
+          .catch(fail)
+          .then(done);
+    });
+
+    it('throws an error if another store is in progress', function(done) {
+      var p1 = storage.store('', {}).catch(fail);
+      var p2 = storage.store('', {}).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.STORE_ALREADY_IN_PROGRESS);
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      });
+      Promise.all([p1, p2]).catch(fail).then(done);
+    });
+
+    it('throws an error if the content is a live stream', function(done) {
+      manifest.presentationTimeline.setDuration(Infinity);
+      manifest.presentationTimeline.setStatic(false);
+
+      storage.store('', {}).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.CANNOT_STORE_LIVE_OFFLINE,
+            '');
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      }).then(done);
+    });
+
+    it('throws an error if DRM sessions are not ready', function(done) {
+      var drmInfo = {
+        keySystem: 'com.example.abc',
+        licenseServerUri: 'http://example.com',
+        persistentStateRequire: true,
+        audioRobustness: 'HARDY'
+      };
+      drmEngine.setDrmInfo(drmInfo);
+      drmEngine.setSessionIds([]);
+      storage.store('', {}).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.NO_INIT_DATA_FOR_OFFLINE,
+            '');
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      }).then(done);
+    });
+
+    it('throws an error if storage is not supported', function(done) {
+      fakeStorageEngine = null;
+      // Recreate Storage object so null fakeStorageEngine takes effect.
+      storage = new shaka.offline.Storage(player);
+      storage.store('', {}).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.STORAGE_NOT_SUPPORTED);
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      }).then(done);
+    });
+
+    it('throws an error if destroyed mid-store', function(done) {
+      var p1 = storage.store('', {}).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.OPERATION_ABORTED);
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      });
+      var p2 = storage.destroy();
+      Promise.all([p1, p2]).catch(fail).then(done);
     });
 
     describe('reports progress', function() {
@@ -312,6 +445,7 @@ describe('Storage', function() {
             originalManifestUri: originalUri,
             duration: 4,
             size: 150,
+            expiration: Infinity,
             tracks: tracks,
             appMetadata: undefined
           });
@@ -366,6 +500,7 @@ describe('Storage', function() {
             originalManifestUri: originalUri,
             duration: 5,
             size: jasmine.any(Number),
+            expiration: Infinity,
             tracks: tracks,
             appMetadata: undefined
           });
@@ -398,7 +533,7 @@ describe('Storage', function() {
             .catch(fail)
             .then(done);
       });
-    });
+    });  // describe('reports progress')
 
     describe('segments', function() {
       it('stores media segments', function(done) {
@@ -424,23 +559,23 @@ describe('Storage', function() {
               expect(manifest.size).toBe(34);
               expect(manifest.duration).toBe(5);
               expect(netEngine.request.calls.count()).toBe(6);
-              return fakeDbEngine.get('manifest', 0);
+              return fakeStorageEngine.get('manifest', 0);
             })
             .then(function(manifest) {
               var stream1 = manifest.periods[0].streams[0];
               expect(stream1.initSegmentUri).toBe(null);
               expect(stream1.segments.length).toBe(5);
               expect(stream1.segments[0])
-                  .toEqual({startTime: 0, endTime: 1, uri: 'offline:0/0/0'});
+                  .toEqual({startTime: 0, endTime: 1, uri: 'offline:0/2/0'});
               expect(stream1.segments[3])
-                  .toEqual({startTime: 3, endTime: 4, uri: 'offline:0/0/3'});
+                  .toEqual({startTime: 3, endTime: 4, uri: 'offline:0/2/3'});
 
               var stream2 = manifest.periods[0].streams[1];
               expect(stream2.initSegmentUri).toBe(null);
               expect(stream2.segments.length).toBe(1);
               expect(stream2.segments[0])
                   .toEqual({startTime: 0, endTime: 1, uri: 'offline:0/1/5'});
-              return fakeDbEngine.get('segment', 3);
+              return fakeStorageEngine.get('segment', 3);
             })
             .then(function(segment) {
               expect(segment).toBeTruthy();
@@ -490,7 +625,7 @@ describe('Storage', function() {
       it('stores init segment', function(done) {
         netEngine.setResponseMap({'fake:0': new ArrayBuffer(5)});
 
-        var stream = manifest.periods[0].streamSets[0].streams[0];
+        var stream = manifest.periods[0].variants[0].audio;
         stream.initSegmentReference =
             new shaka.media.InitSegmentReference(makeUris('fake:0'), 0, null);
 
@@ -500,13 +635,13 @@ describe('Storage', function() {
               expect(manifest.size).toBe(5);
               expect(manifest.duration).toBe(0);
               expect(netEngine.request.calls.count()).toBe(1);
-              return fakeDbEngine.get('manifest', 0);
+              return fakeStorageEngine.get('manifest', 0);
             })
             .then(function(manifest) {
               var stream = manifest.periods[0].streams[0];
               expect(stream.segments.length).toBe(0);
-              expect(stream.initSegmentUri).toBe('offline:0/0/0');
-              return fakeDbEngine.get('segment', 0);
+              expect(stream.initSegmentUri).toBe('offline:0/2/0');
+              return fakeStorageEngine.get('segment', 0);
             })
             .then(function(segment) {
               expect(segment).toBeTruthy();
@@ -532,9 +667,9 @@ describe('Storage', function() {
             .then(function(manifest) {
               expect(manifest).toBeTruthy();
               expect(manifest.size).toBe(15);
-              expect(manifest.duration).toBe(3);
+              expect(manifest.duration).toBe(13);
               expect(netEngine.request.calls.count()).toBe(3);
-              return fakeDbEngine.get('manifest', 0);
+              return fakeStorageEngine.get('manifest', 0);
             })
             .then(function(manifest) {
               var stream = manifest.periods[0].streams[0];
@@ -555,18 +690,178 @@ describe('Storage', function() {
 
         var delay = netEngine.delayNextRequest();
         var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
             shaka.util.Error.Category.NETWORK,
             shaka.util.Error.Code.HTTP_ERROR);
         delay.reject(expectedError);
         storage.store('')
-            .then(fail, function(err) {
-              shaka.test.Util.expectToEqualError(err, expectedError);
+            .then(fail, function(error) {
+              shaka.test.Util.expectToEqualError(error, expectedError);
             })
             .catch(fail)
             .then(done);
       });
-    });
-  });
+    });  // describe('segments')
+
+    describe('default track selection callback', function() {
+      var allTextTracks;
+
+      beforeEach(function() {
+        manifest = new shaka.test.ManifestGenerator()
+            .setPresentationDuration(20)
+            .addPeriod(0)
+            // Spanish, primary
+            // To test language selection fallback to primary
+            .addVariant(10).language('es').bandwidth(160).primary()
+              .addVideo(100).size(100, 200)
+              .addAudio(101).language('es').primary()
+            // English variations
+            // To test language selection for exact matches
+            .addVariant(20).language('en').bandwidth(160)
+              .addVideo(200).size(100, 200)
+              .addAudio(201).language('en')
+            .addVariant(21).language('en-US').bandwidth(160)
+              .addVideo(200).size(100, 200)
+              .addAudio(202).language('en-US')
+            .addVariant(22).language('en-GB').bandwidth(160)
+              .addVideo(200).size(100, 200)
+              .addAudio(203).language('en-GB')
+            // French
+            // To test language selection without exact match
+            .addVariant(30).language('fr-CA').bandwidth(160)
+              .addVideo(300).size(100, 200)
+              .addAudio(301).language('fr-CA')
+            // Swahili, multiple video resolutions
+            // To test video resolution selection
+            .addVariant(40).language('sw').bandwidth(160)
+              .addAudio(400).language('sw')
+              .addVideo(401).size(100, 200)  // small SD video
+            .addVariant(41).language('sw').bandwidth(160)
+              .addAudio(400).language('sw')
+              .addVideo(402).size(1080, 720)  // HD video
+            .addVariant(42).language('sw').bandwidth(100)  // low
+              .addAudio(403).language('sw').kind('low')
+              .addVideo(404).size(720, 480)  // largest SD video
+            .addVariant(43).language('sw').bandwidth(200)  // mid
+              .addAudio(405).language('sw').kind('mid')
+              .addVideo(404).size(720, 480)  // largest SD video
+            .addVariant(44).language('sw').bandwidth(300)  // high
+              .addAudio(406).language('sw').kind('high')
+              .addVideo(404).size(720, 480)  // largest SD video
+            // Text streams in various languages
+            // To test text selection
+            .addTextStream(90).language('es')
+            .addTextStream(91).language('en')
+            .addTextStream(92).language('ar')
+            .addTextStream(93).language('el')
+            .addTextStream(94).language('he')
+            .addTextStream(95).language('zh')
+            .build();
+
+        // Get the original text tracks from the manifest.
+        allTextTracks = shaka.util.StreamUtils.getTextTracks(
+            manifest.periods[0], null);
+
+        storage.loadInternal = function() {
+          return Promise.resolve({
+            manifest: manifest,
+            drmEngine: drmEngine
+          });
+        };
+
+        // Use the default track selection callback.
+        storage.configure({ trackSelectionCallback: undefined });
+      });
+
+      function getVariants(data) {
+        return data.tracks.filter(function(t) {
+          return t.type == 'variant';
+        });
+      }
+
+      function getText(data) {
+        return data.tracks.filter(function(t) {
+          return t.type == 'text';
+        });
+      }
+
+      it('stores the best audio language match', function(done) {
+        /**
+         * @param {string} preferredLanguage
+         * @param {string} expectedLanguage
+         * @return {!Promise}
+         */
+        function testAudioMatch(preferredLanguage, expectedLanguage) {
+          player.configure({preferredAudioLanguage: preferredLanguage});
+          return storage.store('').then(function(data) {
+            var variantTracks = getVariants(data);
+            expect(variantTracks.length).toBe(1);
+            expect(variantTracks[0].language).toEqual(expectedLanguage);
+          });
+        }
+
+        var warning = jasmine.createSpy('shaka.log.warning');
+        shaka.log.warning = warning;
+
+        // An exact match is available for en-US, en-GB, and en.
+        // Test all three to show that we are not just choosing the first loose
+        // match, but rather always choosing the best available match.
+        testAudioMatch('en-US', 'en-US').then(function() {
+          return testAudioMatch('en-GB', 'en-GB');
+        }).then(function() {
+          return testAudioMatch('en', 'en');
+        }).then(function() {
+          // The best match for en-AU is a matching base language, en.
+          return testAudioMatch('en-AU', 'en');
+        }).then(function() {
+          // The best match for fr-FR is another related sub-language, fr-CA.
+          return testAudioMatch('fr-FR', 'fr-CA');
+        }).then(function() {
+          // When there is no related match at all, we choose the primary, es.
+          return testAudioMatch('zh', 'es');
+        }).then(function() {
+          // Set the primary flags to false.
+          manifest.periods[0].variants.forEach(function(variant) {
+            variant.primary = false;
+            if (variant.audio)
+              variant.audio.primary = false;
+          });
+          // When there is no related match at all, and no primary, we issue a
+          // warning, and we only store one track.
+          warning.calls.reset();
+          return storage.store('');
+        }).then(function(data) {
+          var variantTracks = getVariants(data);
+          expect(variantTracks.length).toBe(1);
+          expect(warning).toHaveBeenCalled();
+        }).catch(fail).then(done);
+      });
+
+      it('stores the largest SD video track, middle audio', function(done) {
+        // This language will select variants with multiple video resolutions.
+        player.configure({preferredAudioLanguage: 'sw'});
+        storage.store('').then(function(data) {
+          var variantTracks = getVariants(data);
+          expect(variantTracks.length).toBe(1);
+          expect(variantTracks[0].width).toBe(720);
+          expect(variantTracks[0].height).toBe(480);
+          expect(variantTracks[0].language).toEqual('sw');
+          // Note that kind == 'mid' is not realistic, but we use it here as a
+          // convenient way to detect which audio was selected after offline
+          // storage removes bandwidth information from the original tracks.
+          expect(variantTracks[0].kind).toEqual('mid');
+        }).catch(fail).then(done);
+      });
+
+      it('stores all text tracks', function(done) {
+        storage.store('').then(function(data) {
+          var textTracks = getText(data);
+          expect(textTracks.length).toBe(allTextTracks.length);
+          expect(textTracks).toEqual(jasmine.arrayContaining(allTextTracks));
+        }).catch(fail).then(done);
+      });
+    });  // describe('default track selection callback')
+  });  // describe('store')
 
   describe('remove', function() {
     var segmentId;
@@ -581,7 +876,7 @@ describe('Storage', function() {
           .then(function(refs) {
             var manifest = createManifest(manifestId);
             manifest.periods[0].streams.push({segments: refs});
-            return fakeDbEngine.insert('manifest', manifest);
+            return fakeStorageEngine.insert('manifest', manifest);
           })
           .then(function() {
             expectDatabaseCount(1, 5);
@@ -603,7 +898,7 @@ describe('Storage', function() {
             var manifest = createManifest(manifestId);
             manifest.periods[0].streams.push(
                 {initSegmentUri: data[1][0].uri, segments: data[0]});
-            return fakeDbEngine.insert('manifest', manifest);
+            return fakeStorageEngine.insert('manifest', manifest);
           })
           .then(function() {
             expectDatabaseCount(1, 6);
@@ -625,7 +920,7 @@ describe('Storage', function() {
             var manifest = createManifest(manifestId);
             manifest.periods[0].streams.push({segments: data[0]});
             manifest.periods[0].streams.push({segments: data[1]});
-            return fakeDbEngine.insert('manifest', manifest);
+            return fakeStorageEngine.insert('manifest', manifest);
           })
           .then(function() {
             expectDatabaseCount(1, 8);
@@ -649,7 +944,7 @@ describe('Storage', function() {
               {streams: [{segments: data[0]}]},
               {streams: [{segments: data[1]}]}
             ];
-            return fakeDbEngine.insert('manifest', manifest);
+            return fakeStorageEngine.insert('manifest', manifest);
           })
           .then(function() {
             expectDatabaseCount(1, 8);
@@ -674,8 +969,8 @@ describe('Storage', function() {
             var manifest2 = createManifest(manifestId2);
             manifest2.periods[0].streams.push({segments: data[1]});
             return Promise.all([
-              fakeDbEngine.insert('manifest', manifest1),
-              fakeDbEngine.insert('manifest', manifest2)
+              fakeStorageEngine.insert('manifest', manifest1),
+              fakeStorageEngine.insert('manifest', manifest2)
             ]);
           })
           .then(function() {
@@ -684,7 +979,7 @@ describe('Storage', function() {
           })
           .then(function() {
             expectDatabaseCount(1, 3);
-            return fakeDbEngine.get('segment', segmentId - 1);
+            return fakeStorageEngine.get('segment', segmentId - 1);
           })
           .then(function(segment) { expect(segment).toBeTruthy(); })
           .catch(fail)
@@ -698,7 +993,7 @@ describe('Storage', function() {
             var manifest = createManifest(manifestId);
             data[0].uri = 'offline:0/0/1253';
             manifest.periods[0].streams.push({segments: data});
-            return fakeDbEngine.insert('manifest', manifest);
+            return fakeStorageEngine.insert('manifest', manifest);
           })
           .then(function() {
             expectDatabaseCount(1, 5);
@@ -712,6 +1007,29 @@ describe('Storage', function() {
           .then(done);
     });
 
+    it('throws an error if the content is not found', function(done) {
+      removeManifest(0).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.REQUESTED_ITEM_NOT_FOUND,
+            'offline:0');
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      }).then(done);
+    });
+
+    it('throws an error if the URI is malformed', function(done) {
+      var bogusContent = {offlineUri: 'foo:bar'};
+      storage.remove(bogusContent).then(fail).catch(function(error) {
+        var expectedError = new shaka.util.Error(
+            shaka.util.Error.Severity.CRITICAL,
+            shaka.util.Error.Category.STORAGE,
+            shaka.util.Error.Code.MALFORMED_OFFLINE_URI,
+            'foo:bar');
+        shaka.test.Util.expectToEqualError(error, expectedError);
+      }).then(done);
+    });
+
     it('raises not found error', function(done) {
       removeManifest(0)
           .then(fail)
@@ -719,6 +1037,7 @@ describe('Storage', function() {
             shaka.test.Util.expectToEqualError(
                 e,
                 new shaka.util.Error(
+                    shaka.util.Error.Severity.CRITICAL,
                     shaka.util.Error.Category.STORAGE,
                     shaka.util.Error.Code.REQUESTED_ITEM_NOT_FOUND,
                     'offline:0'));
@@ -731,9 +1050,9 @@ describe('Storage', function() {
      * @param {number} segmentCount
      */
     function expectDatabaseCount(manifestCount, segmentCount) {
-      var manifests = fakeDbEngine.getAllData('manifest');
+      var manifests = fakeStorageEngine.getAllData('manifest');
       expect(Object.keys(manifests).length).toBe(manifestCount);
-      var segments = fakeDbEngine.getAllData('segment');
+      var segments = fakeStorageEngine.getAllData('segment');
       expect(Object.keys(segments).length).toBe(segmentCount);
     }
 
@@ -764,21 +1083,19 @@ describe('Storage', function() {
       for (var i = 0; i < count; i++) {
         ret[i] = {key: segmentId++};
       }
-      return Promise
-          .all(ret.map(function(segment) {
-            return fakeDbEngine.insert('segment', segment);
-          }))
-          .then(function() {
-            return ret.map(function(segment, i) {
-              return {
-                uri: 'offline:' + manifestId + '/0/' + segment.key,
-                startTime: i,
-                endTime: (i + 1)
-              };
-            });
-          });
+      return Promise.all(ret.map(function(segment) {
+        return fakeStorageEngine.insert('segment', segment);
+      })).then(function() {
+        return ret.map(function(segment, i) {
+          return {
+            uri: 'offline:' + manifestId + '/0/' + segment.key,
+            startTime: i,
+            endTime: (i + 1)
+          };
+        });
+      });
     }
-  });
+  });  // describe('remove')
 
   function makeUris(uri) {
     return function() { return [uri]; };

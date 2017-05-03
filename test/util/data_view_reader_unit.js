@@ -92,6 +92,20 @@ describe('DataViewReader', function() {
     expect(value4).toBe(0xffff0100);
   });
 
+  it('reads an int32 in big endian', function() {
+    var value1 = bigEndianReader.readInt32();
+    expect(value1).toBe(66051);
+
+    var value2 = bigEndianReader.readInt32();
+    expect(value2).toBe(67438087);
+
+    var value3 = bigEndianReader2.readInt32();
+    expect(value3).toBe(-559038737);
+
+    var value4 = bigEndianReader2.readInt32();
+    expect(value4).toBe(-65280);
+  });
+
   it('reads a uint64 in big endian', function() {
     var value = bigEndianReader.readUint64();
     expect(value).toBe(0x0001020304050607);
@@ -139,6 +153,20 @@ describe('DataViewReader', function() {
     expect(value4).toBe(0x0001ffff);
   });
 
+  it('reads an int32 in little endian', function() {
+    var value1 = littleEndianReader.readInt32();
+    expect(value1).toBe(50462976);
+
+    var value2 = littleEndianReader.readInt32();
+    expect(value2).toBe(117835012);
+
+    var value3 = littleEndianReader2.readInt32();
+    expect(value3).toBe(-272716322);
+
+    var value4 = littleEndianReader2.readInt32();
+    expect(value4).toBe(131071);
+  });
+
   it('reads a uint64 in little endian', function() {
     var value = littleEndianReader2.readUint64();
     expect(value).toBe(0x0001ffffefbeadde);
@@ -168,69 +196,53 @@ describe('DataViewReader', function() {
     expect(bigEndianReader.getPosition()).toBe(8);
   });
 
-  it('detects end-of-stream when reading a uint8', function() {
-    bigEndianReader.skip(7);
-    bigEndianReader.readUint8();
-
-    var exception = null;
-
-    try {
+  describe('end-of-stream', function() {
+    it('detects when reading a uint8', function() {
+      bigEndianReader.skip(7);
       bigEndianReader.readUint8();
-    } catch (e) {
-      exception = e;
+      runTest(function() { bigEndianReader.readUint8(); });
+    });
+
+    it('detects when reading a uint16', function() {
+      bigEndianReader.skip(7);
+      runTest(function() { bigEndianReader.readUint16(); });
+    });
+
+    it('detects when reading a uint32', function() {
+      bigEndianReader.skip(5);
+      runTest(function() { bigEndianReader.readUint32(); });
+    });
+
+    it('detects when reading a int32', function() {
+      bigEndianReader.skip(5);
+      runTest(function() { bigEndianReader.readInt32(); });
+    });
+
+    it('detects when reading a uint64', function() {
+      bigEndianReader.skip(3);
+      runTest(function() { bigEndianReader.readUint64(); });
+    });
+
+    it('detects when skipping bytes', function() {
+      bigEndianReader.skip(8);
+      runTest(function() { bigEndianReader.skip(1); });
+    });
+
+    it('detects when reading bytes', function() {
+      bigEndianReader.skip(8);
+      runTest(function() { bigEndianReader.readBytes(1); });
+    });
+
+    function runTest(test) {
+      try {
+        test();
+        fail('Should throw exception');
+      } catch (e) {
+        expect(e).not.toBeNull();
+        expect(e instanceof shaka.util.Error).toBe(true);
+        expect(e.code).toBe(Code.BUFFER_READ_OUT_OF_BOUNDS);
+      }
     }
-
-    expect(exception).not.toBeNull();
-    expect(exception instanceof shaka.util.Error).toBe(true);
-    expect(exception.code).toBe(Code.BUFFER_READ_OUT_OF_BOUNDS);
-  });
-
-  it('detects end-of-stream when reading a uint16', function() {
-    bigEndianReader.skip(7);
-
-    var exception = null;
-
-    try {
-      bigEndianReader.readUint16();
-    } catch (e) {
-      exception = e;
-    }
-
-    expect(exception).not.toBeNull();
-    expect(exception instanceof shaka.util.Error).toBe(true);
-    expect(exception.code).toBe(Code.BUFFER_READ_OUT_OF_BOUNDS);
-  });
-
-  it('detects end-of-stream when reading a uint32', function() {
-    bigEndianReader.skip(5);
-
-    var exception = null;
-
-    try {
-      bigEndianReader.readUint32();
-    } catch (e) {
-      exception = e;
-    }
-
-    expect(exception).not.toBeNull();
-    expect(exception instanceof shaka.util.Error).toBe(true);
-    expect(exception.code).toBe(Code.BUFFER_READ_OUT_OF_BOUNDS);
-  });
-
-  it('detects end-of-stream when skipping bytes', function() {
-    bigEndianReader.skip(8);
-
-    var exception = null;
-
-    try {
-      bigEndianReader.skip(1);
-    } catch (e) {
-      exception = e;
-    }
-
-    expect(exception).not.toBeNull();
-    expect(exception instanceof shaka.util.Error).toBe(true);
-    expect(exception.code).toBe(Code.BUFFER_READ_OUT_OF_BOUNDS);
   });
 
   it('detects uint64s too large for JavaScript', function() {

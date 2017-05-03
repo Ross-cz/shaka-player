@@ -95,6 +95,9 @@ function ShakaControls() {
 
   /** @private {?number} */
   this.mouseStillTimeoutId_ = null;
+
+  /** @private {?number} */
+  this.lastTouchEventTime_ = null;
 }
 
 
@@ -183,6 +186,10 @@ ShakaControls.prototype.init = function(castProxy, onError, notifyCastStatus) {
   this.videoContainer_.addEventListener(
       'mousemove', this.onMouseMove_.bind(this));
   this.videoContainer_.addEventListener(
+      'touchmove', this.onMouseMove_.bind(this));
+  this.videoContainer_.addEventListener(
+      'touchend', this.onMouseMove_.bind(this));
+  this.videoContainer_.addEventListener(
       'mouseout', this.onMouseOut_.bind(this));
 
   this.castProxy_.addEventListener(
@@ -232,13 +239,24 @@ ShakaControls.prototype.loadComplete = function() {
  * Hiding the cursor when the mouse stops moving seems to be the only decent UX
  * in fullscreen mode.  Since we can't use pure CSS for that, we use events both
  * in and out of fullscreen mode.
+ * @param {!Event} event
  * @private
  */
-ShakaControls.prototype.onMouseMove_ = function() {
+ShakaControls.prototype.onMouseMove_ = function(event) {
+  if (event.type == 'touchstart' || event.type == 'touchmove' ||
+      event.type == 'touchend') {
+    this.lastTouchEventTime_ = Date.now();
+  } else if (this.lastTouchEventTime_ + 1000 < Date.now()) {
+    // It has been a while since the last touch event, this is probably a real
+    // mouse moving, so treat it like a mouse.
+    this.lastTouchEventTime_ = null;
+  }
+
   // Use the cursor specified in the CSS file.
   this.videoContainer_.style.cursor = '';
   // Show the controls.
   this.controls_.style.opacity = 1;
+  this.updateTimeAndSeekRange_();
 
   // Hide the cursor when the mouse stops moving.
   // Only applies while the cursor is over the video container.
@@ -246,8 +264,12 @@ ShakaControls.prototype.onMouseMove_ = function() {
     // Reset the timer.
     window.clearTimeout(this.mouseStillTimeoutId_);
   }
-  this.mouseStillTimeoutId_ = window.setTimeout(
-      this.onMouseStill_.bind(this), 3000);
+
+  // Only start a timeout on 'touchend' or for 'mousemove' with no touch events.
+  if (event.type == 'touchend' || !this.lastTouchEventTime_) {
+    this.mouseStillTimeoutId_ = window.setTimeout(
+        this.onMouseStill_.bind(this), 3000);
+  }
 };
 
 
@@ -271,8 +293,9 @@ ShakaControls.prototype.onMouseStill_ = function() {
   // Hide the cursor.  (NOTE: not supported on IE)
   this.videoContainer_.style.cursor = 'none';
   // Revert opacity control to CSS.  Hovering directly over the controls will
-  // keep them showing, even in fullscreen mode.
-  this.controls_.style.opacity = '';
+  // keep them showing, even in fullscreen mode. Unless there were touch events,
+  // then override the hover and hide the controls.
+  this.controls_.style.opacity = this.lastTouchEventTime_ ? '0' : '';
 };
 
 
@@ -287,11 +310,12 @@ ShakaControls.prototype.onContainerTouch_ = function(event) {
   }
 
   if (this.controls_.style.opacity == 1) {
+    this.lastTouchEventTime_ = Date.now();
     // The controls are showing.
     // Let this event continue and become a click.
   } else {
     // The controls are hidden, so show them.
-    this.onMouseMove_();
+    this.onMouseMove_(event);
     // Stop this event from becoming a click event.
     event.preventDefault();
   }
@@ -418,9 +442,7 @@ ShakaControls.prototype.onCaptionClick_ = function() {
 
 /** @private */
 ShakaControls.prototype.onTracksChange_ = function() {
-  var hasText = this.player_.getTracks().some(function(track) {
-    return track.type == 'text';
-  });
+  var hasText = this.player_.getTextTracks().length;
   this.captionButton_.style.display = hasText ? 'inherit' : 'none';
 };
 
@@ -546,16 +568,36 @@ ShakaControls.prototype.showTrickPlay = function(show) {
 
 
 /**
+ * @return {boolean}
+ * @private
+ */
+ShakaControls.prototype.isOpaque_ = function() {
+  var parentElement = this.controls_.parentElement;
+  // The controls are opaque if either:
+  //   1. We have explicitly made them so in JavaScript
+  //   2. The browser has made them so via css and the hover state
+  return (this.controls_.style.opacity == 1 ||
+          parentElement.querySelector('#controls:hover') == this.controls_);
+};
+
+
+/**
  * Called when the seek range or current time need to be updated.
  * @private
  */
 ShakaControls.prototype.updateTimeAndSeekRange_ = function() {
+  // Suppress updates if the controls are hidden.
+  if (!this.isOpaque_()) {
+    return;
+  }
+
   var displayTime = this.isSeeking_ ?
       this.seekBar_.value : this.video_.currentTime;
   var duration = this.video_.duration;
   var bufferedLength = this.video_.buffered.length;
   var bufferedStart = bufferedLength ? this.video_.buffered.start(0) : 0;
-  var bufferedEnd = bufferedLength ? this.video_.buffered.end(0) : 0;
+  var bufferedEnd =
+      bufferedLength ? this.video_.buffered.end(bufferedLength - 1) : 0;
   var seekRange = this.player_.seekRange();
 
   this.seekBar_.min = seekRange.start;

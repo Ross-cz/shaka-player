@@ -96,19 +96,6 @@ shaka.test.Util.expectToEqualError = function(actual, expected) {
 
 
 /**
- * Gets the value of an argument passed from karma.
- * @param {string} name
- * @return {?string}
- */
-shaka.test.Util.getClientArg = function(name) {
-  if (window.__karma__ && __karma__.config.args.length)
-    return __karma__.config.args[0][name] || null;
-  else
-    return null;
-};
-
-
-/**
  * Custom comparer for segment references.
  * @param {*} first
  * @param {*} second
@@ -174,6 +161,19 @@ shaka.test.Util.fetch = function(uri) {
     xhr.send(null /* body */);
   });
 };
+
+
+/**
+ * Accepts a mock object (i.e. a simple JavaScript object composed of jasmine
+ * spies) and makes it strict.  This means that every spy in the given object
+ * will be made to throw an exception by default.
+ * @param {!Object} obj
+ */
+shaka.test.Util.makeMockObjectStrict = function(obj) {
+  for (var name in obj)
+    obj[name].and.throwError(new Error(name));
+};
+
 
 beforeEach(function() {
   jasmine.addCustomEqualityTester(shaka.test.Util.compareReferences);

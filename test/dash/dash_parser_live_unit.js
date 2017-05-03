@@ -15,15 +15,14 @@
  * limitations under the License.
  */
 
-describe('DashParser.Live', function() {
+describe('DashParser Live', function() {
   var Dash;
-  var errorCallback;
   var fakeNetEngine;
-  var newPeriod;
   var oldNow;
   var parser;
   var realTimeout;
   var updateTime = 5;
+  var playerInterface;
   var Util;
 
   beforeAll(function() {
@@ -39,13 +38,23 @@ describe('DashParser.Live', function() {
   beforeEach(function() {
     var retry = shaka.net.NetworkingEngine.defaultRetryParameters();
     fakeNetEngine = new shaka.test.FakeNetworkingEngine();
-    newPeriod = jasmine.createSpy('newPeriod');
-    errorCallback = jasmine.createSpy('error callback');
     parser = new shaka.dash.DashParser();
     parser.configure({
       retryParameters: retry,
-      dash: { clockSyncUri: '', customScheme: function(node) { return null; } }
+      dash: {
+        clockSyncUri: '',
+        customScheme: function(node) { return null; },
+        ignoreDrmInfo: false
+      },
+      hls: { defaultTimeOffset: 0 }
     });
+    playerInterface = {
+      networkingEngine: fakeNetEngine,
+      filterPeriod: function() {},
+      onTimelineRegionAdded: fail,  // Should not have any EventStream elements.
+      onEvent: fail,
+      onError: fail
+    };
   });
 
   afterEach(function() {
@@ -56,6 +65,7 @@ describe('DashParser.Live', function() {
   afterAll(function() {
     Date.now = oldNow;
     jasmine.clock().uninstall();
+    shaka.polyfill.Promise.uninstall();
   });
 
   /**
@@ -70,16 +80,19 @@ describe('DashParser.Live', function() {
    * Makes a simple live manifest with the given representation contents.
    *
    * @param {!Array.<string>} lines
-   * @param {number} updateTime
+   * @param {number?} updateTime
    * @param {number=} opt_duration
    * @return {string}
    */
   function makeSimpleLiveManifestText(lines, updateTime, opt_duration) {
-    var attr = opt_duration ? 'duration="PT' + opt_duration + 'S"' : '';
+    var updateAttr = updateTime != null ?
+        'minimumUpdatePeriod="PT' + updateTime + 'S"' : '';
+    var durationAttr = opt_duration != undefined ?
+        'duration="PT' + opt_duration + 'S"' : '';
     var template = [
-      '<MPD type="dynamic" minimumUpdatePeriod="PT%(updateTime)dS"',
+      '<MPD type="dynamic" %(updateAttr)s',
       '    availabilityStartTime="1970-01-01T00:00:00Z">',
-      '  <Period id="1" %(attr)s>',
+      '  <Period id="1" %(durationAttr)s>',
       '    <AdaptationSet mimeType="video/mp4">',
       '      <Representation id="3" bandwidth="500">',
       '        <BaseURL>http://example.com</BaseURL>',
@@ -90,7 +103,8 @@ describe('DashParser.Live', function() {
       '</MPD>'
     ].join('\n');
     var text = sprintf(template, {
-      attr: attr,
+      updateAttr: updateAttr,
+      durationAttr: durationAttr,
       contents: lines.join('\n'),
       updateTime: updateTime
     });
@@ -128,7 +142,7 @@ describe('DashParser.Live', function() {
       var secondManifest = makeSimpleLiveManifestText(secondLines, updateTime);
 
       fakeNetEngine.setResponseMapAsText({'dummy://foo': firstManifest});
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             Dash.verifySegmentIndex(manifest, firstReferences, 0);
 
@@ -169,22 +183,22 @@ describe('DashParser.Live', function() {
 
       fakeNetEngine.setResponseMapAsText({'dummy://foo': text});
       Date.now = function() { return 0; };
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest).toBeTruthy();
-            var stream = manifest.periods[0].streamSets[0].streams[0];
+            var stream = manifest.periods[0].variants[0].video;
             expect(stream).toBeTruthy();
 
             expect(stream.findSegmentPosition).toBeTruthy();
-            expect(stream.findSegmentPosition(0)).not.toBe(null);
+            expect(stream.findSegmentPosition(0)).toBe(1);
             Dash.verifySegmentIndex(manifest, basicRefs, 0);
 
-            // 15 seconds for @timeShiftBufferDepth, the first segment duration,
-            // and the @suggestedPresentationDelay.
-            Date.now = function() { return (2 * 15 + 5) * 1000; };
+            // 15 seconds for @timeShiftBufferDepth and the first segment
+            // duration.
+            Date.now = function() { return 2 * 15 * 1000; };
             delayForUpdatePeriod();
             // The first reference should have been evicted.
-            expect(stream.findSegmentPosition(0)).toBe(null);
+            expect(stream.findSegmentPosition(0)).toBe(2);
             Dash.verifySegmentIndex(manifest, basicRefs.slice(1), 0);
           }).catch(fail).then(done);
       shaka.polyfill.Promise.flush();
@@ -227,21 +241,21 @@ describe('DashParser.Live', function() {
 
       fakeNetEngine.setResponseMapAsText({'dummy://foo': text});
       Date.now = function() { return 0; };
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             Dash.verifySegmentIndex(manifest, basicRefs, 0);
             Dash.verifySegmentIndex(manifest, basicRefs, 1);
 
-            // 15 seconds for @timeShiftBufferDepth, the first segment duration,
-            // and the @suggestedPresentationDelay.
-            Date.now = function() { return (2 * 15 + 5) * 1000; };
+            // 15 seconds for @timeShiftBufferDepth and the first segment
+            // duration.
+            Date.now = function() { return 2 * 15 * 1000; };
             delayForUpdatePeriod();
             // The first reference should have been evicted.
             Dash.verifySegmentIndex(manifest, basicRefs.slice(1), 0);
             Dash.verifySegmentIndex(manifest, basicRefs, 1);
 
             // Same as above, but 1 period length later
-            Date.now = function() { return (2 * 15 + 5 + pStart) * 1000; };
+            Date.now = function() { return (2 * 15 + pStart) * 1000; };
             delayForUpdatePeriod();
             Dash.verifySegmentIndex(manifest, [], 0);
             Dash.verifySegmentIndex(manifest, basicRefs.slice(1), 1);
@@ -270,7 +284,7 @@ describe('DashParser.Live', function() {
 
       fakeNetEngine.setResponseMapAsText({'dummy://foo': text});
       Date.now = function() { return 0; };
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest.periods.length).toBe(1);
             var timeline = manifest.presentationTimeline;
@@ -308,7 +322,7 @@ describe('DashParser.Live', function() {
 
       fakeNetEngine.setResponseMapAsText({'dummy://foo': text});
       Date.now = function() { return 0; };
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest.periods.length).toBe(2);
             expect(manifest.periods[1].startTime).toBe(60);
@@ -341,18 +355,21 @@ describe('DashParser.Live', function() {
         sprintf(template, {updateTime: updateTime, contents: lines.join('\n')});
     var firstManifest = makeSimpleLiveManifestText(lines, updateTime);
 
+    var filterPeriod = jasmine.createSpy('filterPeriod');
+    playerInterface.filterPeriod = filterPeriod;
+
     fakeNetEngine.setResponseMapAsText({'dummy://foo': firstManifest});
-    parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+    parser.start('dummy://foo', playerInterface)
         .then(function(manifest) {
           expect(manifest.periods.length).toBe(1);
-          expect(newPeriod.calls.count()).toBe(1);
+          expect(filterPeriod.calls.count()).toBe(1);
 
           fakeNetEngine.setResponseMapAsText({'dummy://foo': secondManifest});
           delayForUpdatePeriod();
 
           // Should update the same manifest object.
           expect(manifest.periods.length).toBe(2);
-          expect(newPeriod.calls.count()).toBe(2);
+          expect(filterPeriod.calls.count()).toBe(2);
         }).catch(fail).then(done);
     shaka.polyfill.Promise.flush();
   });
@@ -386,7 +403,7 @@ describe('DashParser.Live', function() {
     fakeNetEngine.request.and.returnValue(
         Promise.resolve({uri: redirectedUri, data: manifestData}));
 
-    parser.start(originalUri, fakeNetEngine, newPeriod, errorCallback)
+    parser.start(originalUri, playerInterface)
         .then(function(manifest) {
           // The manifest request was made to the original URL.
           expect(fakeNetEngine.request.calls.count()).toBe(1);
@@ -395,7 +412,7 @@ describe('DashParser.Live', function() {
 
           // Since the manifest request was redirected, the segment refers to
           // the redirected base.
-          var stream = manifest.periods[0].streamSets[0].streams[0];
+          var stream = manifest.periods[0].variants[0].video;
           var segmentUri = stream.getSegmentReference(1).getUris()[0];
           expect(segmentUri).toBe(redirectedUri + 's1.mp4');
         }).catch(fail).then(done);
@@ -407,20 +424,22 @@ describe('DashParser.Live', function() {
       '<SegmentTemplate startNumber="1" media="s$Number$.mp4" duration="2" />'
     ];
     var manifest = makeSimpleLiveManifestText(lines, updateTime);
+    playerInterface.onError = jasmine.createSpy('onError');
 
     fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
-    parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+    parser.start('dummy://foo', playerInterface)
         .then(function(manifest) {
           expect(fakeNetEngine.request.calls.count()).toBe(1);
 
           var error = new shaka.util.Error(
+              shaka.util.Error.Severity.CRITICAL,
               shaka.util.Error.Category.NETWORK,
               shaka.util.Error.Code.BAD_HTTP_STATUS);
           var promise = Promise.reject(error);
           fakeNetEngine.request.and.returnValue(promise);
 
           delayForUpdatePeriod();
-          expect(errorCallback.calls.count()).toBe(1);
+          expect(playerInterface.onError.calls.count()).toBe(1);
         }).catch(fail).then(done);
     shaka.polyfill.Promise.flush();
   });
@@ -433,7 +452,7 @@ describe('DashParser.Live', function() {
     var manifest = makeSimpleLiveManifestText(lines, updateTime);
 
     fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
-    parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+    parser.start('dummy://foo', playerInterface)
         .then(function(manifest) {
           expect(fakeNetEngine.request.calls.count()).toBe(1);
           expect(manifest).toBeTruthy();
@@ -454,8 +473,56 @@ describe('DashParser.Live', function() {
     shaka.polyfill.Promise.flush();
   });
 
+  it('still updates when @minimumUpdatePeriod is zero', function(done) {
+    var lines = [
+      '<SegmentTemplate startNumber="1" media="s$Number$.mp4" duration="2" />'
+    ];
+    // updateTime parameter sets @minimumUpdatePeriod in the manifest.
+    var manifest = makeSimpleLiveManifestText(lines, /* updateTime */ 0);
+
+    fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
+    parser.start('dummy://foo', playerInterface)
+        .then(function(manifest) {
+          expect(manifest).toBeTruthy();
+          fakeNetEngine.request.calls.reset();
+
+          var waitTimeMs = shaka.dash.DashParser['MIN_UPDATE_PERIOD_'] * 1000;
+          jasmine.clock().tick(waitTimeMs);
+          shaka.polyfill.Promise.flush();
+
+          // Update period has passed.
+          expect(fakeNetEngine.request).toHaveBeenCalled();
+        }).catch(fail).then(done);
+    shaka.polyfill.Promise.flush();
+  });
+
+  it('does not update when @minimumUpdatePeriod is missing', function(done) {
+    var lines = [
+      '<SegmentTemplate startNumber="1" media="s$Number$.mp4" duration="2" />'
+    ];
+    // updateTime parameter sets @minimumUpdatePeriod in the manifest.
+    var manifest = makeSimpleLiveManifestText(lines, /* updateTime */ null);
+
+    fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
+    parser.start('dummy://foo', playerInterface)
+        .then(function(manifest) {
+          expect(manifest).toBeTruthy();
+          fakeNetEngine.request.calls.reset();
+
+          var waitTimeMs = shaka.dash.DashParser['MIN_UPDATE_PERIOD_'] * 1000;
+          jasmine.clock().tick(waitTimeMs * 2);
+          shaka.polyfill.Promise.flush();
+
+          // Even though we have waited longer than the minimum update period,
+          // the missing attribute means "do not update".  So no update should
+          // have happened.
+          expect(fakeNetEngine.request).not.toHaveBeenCalled();
+        }).catch(fail).then(done);
+    shaka.polyfill.Promise.flush();
+  });
+
   it('uses Mpd.Location', function(done) {
-    var manifest = [
+    var manifestText = [
       '<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"',
       '    suggestedPresentationDelay="PT5S"',
       '    minimumUpdatePeriod="PT' + updateTime + 'S">',
@@ -470,10 +537,10 @@ describe('DashParser.Live', function() {
       '  </Period>',
       '</MPD>'
     ].join('\n');
-    fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
+    fakeNetEngine.setResponseMapAsText({'dummy://foo': manifestText});
 
     var manifestRequest = shaka.net.NetworkingEngine.RequestType.MANIFEST;
-    parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+    parser.start('dummy://foo', playerInterface)
         .then(function(manifest) {
           expect(fakeNetEngine.request.calls.count()).toBe(1);
           fakeNetEngine.expectRequest('dummy://foo', manifestRequest);
@@ -483,7 +550,7 @@ describe('DashParser.Live', function() {
           fakeNetEngine.request.and.callFake(function(type, request) {
             expect(type).toBe(manifestRequest);
             expect(request.uris).toEqual(['http://foobar', 'http://foobar2']);
-            var data = shaka.util.StringUtils.toUTF8(manifest);
+            var data = shaka.util.StringUtils.toUTF8(manifestText);
             return Promise.resolve(
                 {uri: request.uris[0], data: data, headers: {}});
           });
@@ -514,7 +581,7 @@ describe('DashParser.Live', function() {
     fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
 
     Date.now = function() { return 600000; /* 10 minutes */ };
-    parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+    parser.start('dummy://foo', playerInterface)
         .then(function(manifest) {
           expect(manifest).toBeTruthy();
           var timeline = manifest.presentationTimeline;
@@ -522,11 +589,10 @@ describe('DashParser.Live', function() {
 
           //  We are 5 minutes into the presentation, with a
           //  @timeShiftBufferDepth of 120 seconds and a @maxSegmentDuration of
-          //  10 seconds, the normal start will be 2:50; but with a 60
-          //  @suggestedPresentationDelay it should be 1:50.
-          expect(timeline.getSegmentAvailabilityStart()).toBe(110);
-          // Similarly, normally the end should be 4:50; but with the delay
-          // it will be 3:50 minutes.
+          //  10 seconds, the start will be 2:50.
+          expect(timeline.getSegmentAvailabilityStart()).toBe(170);
+          // Normally the end should be 4:50; but with a 60 second
+          // @suggestedPresentationDelay it will be 3:50 minutes.
           expect(timeline.getSegmentAvailabilityEnd()).toBe(290);
           expect(timeline.getSeekRangeEnd()).toBe(230);
         }).catch(fail).then(done);
@@ -554,7 +620,7 @@ describe('DashParser.Live', function() {
       fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
 
       Date.now = function() { return 600000; /* 10 minutes */ };
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest).toBeTruthy();
             var timeline = manifest.presentationTimeline;
@@ -630,7 +696,7 @@ describe('DashParser.Live', function() {
 
       fakeNetEngine.setResponseMapAsText({'dummy://foo': manifest});
       Date.now = function() { return 600000; /* 10 minutes */ };
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest).toBeTruthy();
             var timeline = manifest.presentationTimeline;
@@ -683,7 +749,7 @@ describe('DashParser.Live', function() {
     });
 
     it('stops updates', function(done) {
-      parser.start(manifestUri, fakeNetEngine, newPeriod, errorCallback)
+      parser.start(manifestUri, playerInterface)
           .then(function(manifest) {
             fakeNetEngine.expectRequest(manifestUri, manifestRequestType);
             fakeNetEngine.request.calls.reset();
@@ -696,7 +762,7 @@ describe('DashParser.Live', function() {
     });
 
     it('stops initial parsing', function(done) {
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest).toBe(null);
             fakeNetEngine.expectRequest(manifestUri, manifestRequestType);
@@ -714,7 +780,7 @@ describe('DashParser.Live', function() {
     });
 
     it('interrupts manifest updates', function(done) {
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
+      parser.start('dummy://foo', playerInterface)
           .then(function(manifest) {
             expect(manifest).toBeTruthy();
             fakeNetEngine.expectRequest(manifestUri, manifestRequestType);
@@ -766,8 +832,7 @@ describe('DashParser.Live', function() {
         expect(fakeNetEngine.request).not.toHaveBeenCalled();
       }).catch(fail).then(done);
 
-      parser.start('dummy://foo', fakeNetEngine, newPeriod, errorCallback)
-          .catch(fail);
+      parser.start('dummy://foo', playerInterface).catch(fail);
       shaka.polyfill.Promise.flush();
     });
   });
@@ -905,6 +970,134 @@ describe('DashParser.Live', function() {
 
     testCommonBehaviors(
         basicLines, basicRefs, updateLines, updateRefs, partialUpdateLines);
+  });
+
+  describe('EventStream', function() {
+    var onTimelineRegionAddedSpy;
+    var originalManifest;
+
+    beforeAll(function() {
+      originalManifest = [
+        '<MPD type="dynamic" minimumUpdatePeriod="PT' + updateTime + 'S"',
+        '    availabilityStartTime="1970-01-01T00:00:00Z">',
+        '  <Period id="1" duration="PT60S" start="PT10S">',
+        '    <EventStream schemeIdUri="http://example.com" value="foobar"',
+        '        timescale="100">',
+        '      <Event duration="5000" />',
+        '      <Event id="abc" presentationTime="300" duration="1000" />',
+        '    </EventStream>',
+        '    <AdaptationSet mimeType="video/mp4">',
+        '      <Representation bandwidth="1">',
+        '        <SegmentBase indexRange="100-200" />',
+        '      </Representation>',
+        '    </AdaptationSet>',
+        '  </Period>',
+        '</MPD>'
+      ].join('\n');
+    });
+
+    beforeEach(function() {
+      onTimelineRegionAddedSpy = jasmine.createSpy('onTimelineRegionAdded');
+      playerInterface.onTimelineRegionAdded = onTimelineRegionAddedSpy;
+    });
+
+    it('will parse EventStream nodes', function(done) {
+      fakeNetEngine.setResponseMapAsText({'dummy://foo': originalManifest});
+      parser.start('dummy://foo', playerInterface)
+          .then(function(manifest) {
+            expect(onTimelineRegionAddedSpy).toHaveBeenCalledTimes(2);
+
+            expect(onTimelineRegionAddedSpy).toHaveBeenCalledWith({
+              schemeIdUri: 'http://example.com',
+              value: 'foobar',
+              startTime: 10,
+              endTime: 60,
+              id: '',
+              eventElement: jasmine.any(Element)
+            });
+            expect(onTimelineRegionAddedSpy).toHaveBeenCalledWith({
+              schemeIdUri: 'http://example.com',
+              value: 'foobar',
+              startTime: 13,
+              endTime: 23,
+              id: 'abc',
+              eventElement: jasmine.any(Element)
+            });
+          })
+          .catch(fail)
+          .then(done);
+      shaka.polyfill.Promise.flush();
+    });
+
+    it('will add timeline regions on manifest update', function(done) {
+      var newManifest = [
+        '<MPD type="dynamic" minimumUpdatePeriod="PT' + updateTime + 'S"',
+        '    availabilityStartTime="1970-01-01T00:00:00Z">',
+        '  <Period id="1" duration="PT30S">',
+        '    <EventStream schemeIdUri="http://example.com" timescale="100">',
+        '      <Event id="100" />',
+        '    </EventStream>',
+        '    <AdaptationSet mimeType="video/mp4">',
+        '      <Representation bandwidth="1">',
+        '        <SegmentBase indexRange="100-200" />',
+        '      </Representation>',
+        '    </AdaptationSet>',
+        '  </Period>',
+        '</MPD>'
+      ].join('\n');
+
+      fakeNetEngine.setResponseMapAsText({'dummy://foo': originalManifest});
+      parser.start('dummy://foo', playerInterface)
+          .then(function(manifest) {
+            expect(onTimelineRegionAddedSpy).toHaveBeenCalledTimes(2);
+            onTimelineRegionAddedSpy.calls.reset();
+
+            fakeNetEngine.setResponseMapAsText({'dummy://foo': newManifest});
+            delayForUpdatePeriod();
+
+            expect(onTimelineRegionAddedSpy).toHaveBeenCalledTimes(1);
+          })
+          .catch(fail)
+          .then(done);
+      shaka.polyfill.Promise.flush();
+    });
+
+    it('will not let an event exceed the Period duration', function(done) {
+      var newManifest = [
+        '<MPD>',
+        '  <Period id="1" duration="PT30S">',
+        '    <EventStream schemeIdUri="http://example.com" timescale="1">',
+        '      <Event presentationTime="10" duration="15"/>',
+        '      <Event presentationTime="25" duration="50"/>',
+        '      <Event presentationTime="50" duration="10"/>',
+        '    </EventStream>',
+        '    <AdaptationSet mimeType="video/mp4">',
+        '      <Representation bandwidth="1">',
+        '        <SegmentBase indexRange="100-200" />',
+        '      </Representation>',
+        '    </AdaptationSet>',
+        '  </Period>',
+        '</MPD>'
+      ].join('\n');
+
+      fakeNetEngine.setResponseMapAsText({'dummy://foo': newManifest});
+      parser.start('dummy://foo', playerInterface)
+          .then(function(manifest) {
+            expect(onTimelineRegionAddedSpy).toHaveBeenCalledTimes(3);
+            expect(onTimelineRegionAddedSpy)
+                .toHaveBeenCalledWith(
+                    jasmine.objectContaining({startTime: 10, endTime: 25}));
+            expect(onTimelineRegionAddedSpy)
+                .toHaveBeenCalledWith(
+                    jasmine.objectContaining({startTime: 25, endTime: 30}));
+            expect(onTimelineRegionAddedSpy)
+                .toHaveBeenCalledWith(
+                    jasmine.objectContaining({startTime: 30, endTime: 30}));
+          })
+          .catch(fail)
+          .then(done);
+      shaka.polyfill.Promise.flush();
+    });
   });
 });
 

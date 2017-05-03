@@ -115,6 +115,8 @@ shaka.test.StreamingEngineUtil.createFakePresentationTimeline = function(
     getEarliestStart: jasmine.createSpy('getEarliestStart'),
     getSegmentAvailabilityStart:
         jasmine.createSpy('getSegmentAvailabilityStart'),
+    getSafeAvailabilityStart:
+        jasmine.createSpy('getSafeAvailabilityStart'),
     getSegmentAvailabilityEnd:
         jasmine.createSpy('getSegmentAvailabilityEnd'),
     getSeekRangeEnd: jasmine.createSpy('getSeekRangeEnd'),
@@ -134,6 +136,10 @@ shaka.test.StreamingEngineUtil.createFakePresentationTimeline = function(
 
   timeline.getSegmentAvailabilityStart.and.callFake(function() {
     return timeline.segmentAvailabilityStart;
+  });
+
+  timeline.getSafeAvailabilityStart.and.callFake(function(delay) {
+    return timeline.segmentAvailabilityStart + delay;
   });
 
   timeline.getSegmentAvailabilityEnd.and.callFake(function() {
@@ -161,8 +167,8 @@ shaka.test.StreamingEngineUtil.createFakePresentationTimeline = function(
 /**
  * Creates a fake Manifest.
  *
- * Each Period within the fake Manifest has a special property:
- * |streamSetsByType|, which maps a content type to a StreamSet.
+ * Each Period within the fake Manifest has one Variant and one
+ * text stream.
  *
  * Audio, Video, and Text Stream MIME types are set to
  * "audio/mp4; codecs=mp4a.40.2", "video/mp4; codecs=avc1.42c01e",
@@ -224,9 +230,12 @@ shaka.test.StreamingEngineUtil.createManifest = function(
   for (var i = 0; i < periodStartTimes.length; ++i) {
     var period = {
       startTime: periodStartTimes[i],
-      streamSets: [],
-      streamSetsByType: {}
+      variants: [],
+      textStreams: []
     };
+
+    var variant = {};
+    var trickModeVideo;
 
     for (var type in segmentDurations) {
       var stream = shaka.test.StreamingEngineUtil.createMockStream(type, id++);
@@ -234,11 +243,15 @@ shaka.test.StreamingEngineUtil.createManifest = function(
       stream.findSegmentPosition.and.callFake(find.bind(null, type, i + 1));
       stream.getSegmentReference.and.callFake(get.bind(null, type, i + 1));
 
-      var streamSet = {type: type, streams: [stream]};
-      period.streamSets.push(streamSet);
-      period.streamSetsByType[type] = streamSet;
+      var ContentType = shaka.util.ManifestParserUtils.ContentType;
+      if (type == ContentType.TEXT) period.textStreams.push(stream);
+      else if (type == ContentType.AUDIO) variant.audio = stream;
+      else if (type == 'trickvideo') trickModeVideo = stream;
+      else variant.video = stream;
     }
 
+    variant.video.trickModeVideo = trickModeVideo;
+    period.variants.push(variant);
     manifest.periods.push(period);
   }
 
@@ -300,6 +313,7 @@ shaka.test.StreamingEngineUtil.createMockStream = function(type, id) {
   return {
     audio: shaka.test.StreamingEngineUtil.createMockAudioStream,
     video: shaka.test.StreamingEngineUtil.createMockVideoStream,
+    trickvideo: shaka.test.StreamingEngineUtil.createMockVideoStream,
     text: shaka.test.StreamingEngineUtil.createMockTextStream
   }[type](id);
 };
@@ -312,6 +326,7 @@ shaka.test.StreamingEngineUtil.createMockStream = function(type, id) {
  * @return {!Object}
  */
 shaka.test.StreamingEngineUtil.createMockAudioStream = function(id) {
+  var ContentType = shaka.util.ManifestParserUtils.ContentType;
   return {
     id: id,
     createSegmentIndex: jasmine.createSpy('createSegmentIndex'),
@@ -321,7 +336,8 @@ shaka.test.StreamingEngineUtil.createMockAudioStream = function(id) {
     presentationTimeOffset: 0,
     mimeType: 'audio/mp4',
     codecs: 'mp4a.40.2',
-    bandwidth: 192000
+    bandwidth: 192000,
+    type: ContentType.AUDIO
   };
 };
 
@@ -333,6 +349,7 @@ shaka.test.StreamingEngineUtil.createMockAudioStream = function(id) {
  * @return {!Object}
  */
 shaka.test.StreamingEngineUtil.createMockVideoStream = function(id) {
+  var ContentType = shaka.util.ManifestParserUtils.ContentType;
   return {
     id: id,
     createSegmentIndex: jasmine.createSpy('createSegmentIndex'),
@@ -344,7 +361,8 @@ shaka.test.StreamingEngineUtil.createMockVideoStream = function(id) {
     codecs: 'avc1.42c01e',
     bandwidth: 5000000,
     width: 600,
-    height: 400
+    height: 400,
+    type: ContentType.VIDEO
   };
 };
 
@@ -356,6 +374,7 @@ shaka.test.StreamingEngineUtil.createMockVideoStream = function(id) {
  * @return {!Object}
  */
 shaka.test.StreamingEngineUtil.createMockTextStream = function(id) {
+  var ManifestParserUtils = shaka.util.ManifestParserUtils;
   return {
     id: id,
     createSegmentIndex: jasmine.createSpy('createSegmentIndex'),
@@ -364,7 +383,8 @@ shaka.test.StreamingEngineUtil.createMockTextStream = function(id) {
     initSegmentReference: null,
     presentationTimeOffset: 0,
     mimeType: 'text/vtt',
-    kind: 'subtitles'
+    kind: ManifestParserUtils.TextStreamKind.SUBTITLE,
+    type: ManifestParserUtils.ContentType.TEXT
   };
 };
 

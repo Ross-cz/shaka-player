@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 #
 # Copyright 2016 Google Inc.  All Rights Reserved.
 #
@@ -24,7 +24,6 @@ This checks:
 
 import os
 import re
-import subprocess
 import sys
 
 import build
@@ -46,7 +45,8 @@ def check_lint():
 
   jsdoc3_tags = ','.join([
       'static', 'summary', 'namespace', 'event', 'description', 'property',
-      'fires', 'listens', 'example', 'exportDoc', 'tutorial'])
+      'fires', 'listens', 'example', 'exportDoc', 'exportInterface',
+      'tutorial'])
   args = ['--nobeep', '--custom_jsdoc_tags', jsdoc3_tags, '--strict']
   base = shakaBuildHelpers.get_source_base()
   cmd = os.path.join(base, 'third_party', 'gjslint', 'gjslint')
@@ -55,30 +55,27 @@ def check_lint():
   # command-line arguments using argv.  Have to explicitly execute python so
   # it works on Windows.
   cmd_line = [sys.executable or 'python', cmd] + args + get_lint_files()
-  shakaBuildHelpers.print_cmd_line(cmd_line)
-  return subprocess.call(cmd_line) == 0
+  return shakaBuildHelpers.execute_get_code(cmd_line) == 0
 
 
 def check_html_lint():
   """Runs the HTML linter over the HTML files.
 
-  Skipped if htmlhint is not available.
-
   Returns:
     True on success, False on failure.
   """
-  htmlhint_path = shakaBuildHelpers.get_node_binary_path('htmlhint')
-  if not os.path.exists(htmlhint_path):
-    return True
-  print 'Running htmlhint...'
+  # Update node modules if needed.
+  if not shakaBuildHelpers.update_node_modules():
+    return False
 
+  print 'Running htmlhint...'
+  htmlhint_path = shakaBuildHelpers.get_node_binary_path('htmlhint')
   base = shakaBuildHelpers.get_source_base()
   files = ['index.html', 'demo/index.html', 'support.html']
   file_paths = [os.path.join(base, x) for x in files]
   config_path = os.path.join(base, '.htmlhintrc')
   cmd_line = [htmlhint_path, '--config=' + config_path] + file_paths
-  shakaBuildHelpers.print_cmd_line(cmd_line)
-  return subprocess.call(cmd_line) == 0
+  return shakaBuildHelpers.execute_get_code(cmd_line) == 0
 
 
 def check_complete():
@@ -134,7 +131,7 @@ def check_tests():
   # already included.
   opts = ['--jscomp_off=missingRequire', '--jscomp_off=strictMissingRequire',
           '--checks-only', '-O', 'SIMPLE']
-  return test_build.build_raw(opts)
+  return test_build.build_raw(opts, is_debug=True)
 
 
 def usage():

@@ -15,6 +15,13 @@
  * limitations under the License.
  */
 
+/**
+ * @fileoverview Shaka Player demo, main section.
+ *
+ * @suppress {visibility} to work around compiler errors until we can
+ *   refactor the demo into classes that talk via public method.  TODO
+ */
+
 
 /** @suppress {duplicate} */
 var shakaDemo = shakaDemo || {};
@@ -30,6 +37,46 @@ shakaDemo.setupConfiguration_ = function() {
       'change', shakaDemo.onTrickPlayChange_);
   document.getElementById('enableAdaptation').addEventListener(
       'change', shakaDemo.onAdaptationChange_);
+  document.getElementById('logLevelList').addEventListener(
+      'change', shakaDemo.onLogLevelChange_);
+  document.getElementById('enableAutoplay').addEventListener(
+      'change', shakaDemo.onAutoplayChange_);
+};
+
+
+/** @private */
+shakaDemo.onAutoplayChange_ = function() {
+  // Change the hash, to mirror this.
+  shakaDemo.hashShouldChange_();
+};
+
+
+/**
+ * @param {!Event} event
+ * @private
+ */
+shakaDemo.onLogLevelChange_ = function(event) {
+  // shaka.log is not set if logging isn't enabled.
+  // I.E. if using the compiled version of shaka.
+  if (shaka.log) {
+    var logLevel = event.target[event.target.selectedIndex];
+    switch (logLevel.value) {
+      case 'info':
+        shaka.log.setLevel(shaka.log.Level.INFO);
+        break;
+      case 'debug':
+        shaka.log.setLevel(shaka.log.Level.DEBUG);
+        break;
+      case 'vv':
+        shaka.log.setLevel(shaka.log.Level.V2);
+        break;
+      case 'v':
+        shaka.log.setLevel(shaka.log.Level.V1);
+        break;
+    }
+    // Change the hash, to mirror this.
+    shakaDemo.hashShouldChange_();
+  }
 };
 
 
@@ -38,15 +85,14 @@ shakaDemo.setupConfiguration_ = function() {
  * @private
  */
 shakaDemo.onConfigKeyUp_ = function(event) {
-  // Update the configuration if the user presses enter.
-  if (event.keyCode != 13) return;
-
   shakaDemo.player_.configure(/** @type {shakaExtern.PlayerConfiguration} */({
     preferredAudioLanguage:
         document.getElementById('preferredAudioLanguage').value,
     preferredTextLanguage:
         document.getElementById('preferredTextLanguage').value
   }));
+  // Change the hash, to mirror this.
+  shakaDemo.hashShouldChange_();
 };
 
 
@@ -59,6 +105,8 @@ shakaDemo.onAdaptationChange_ = function(event) {
   shakaDemo.player_.configure(/** @type {shakaExtern.PlayerConfiguration} */({
     abr: { enabled: event.target.checked }
   }));
+  // Change the hash, to mirror this.
+  shakaDemo.hashShouldChange_();
 };
 
 
@@ -69,4 +117,6 @@ shakaDemo.onAdaptationChange_ = function(event) {
 shakaDemo.onTrickPlayChange_ = function(event) {
   // Show/hide trick play controls.
   shakaDemo.controls_.showTrickPlay(event.target.checked);
+  // Change the hash, to mirror this.
+  shakaDemo.hashShouldChange_();
 };

@@ -24,6 +24,44 @@ describe('CastUtils', function() {
     FakeEvent = shaka.util.FakeEvent;
   });
 
+  it('includes every Player member', function() {
+    var ignoredMembers = [
+      'constructor',  // JavaScript added field
+      'getNetworkingEngine',  // Handled specially
+      'setMaxHardwareResolution',
+      'destroy',  // Should use CastProxy.destroy instead
+
+      // Test helper methods (not @export'd)
+      'createDrmEngine',
+      'createNetworkingEngine',
+      'createPlayhead',
+      'createMediaSource',
+      'createMediaSourceEngine',
+      'createStreamingEngine'
+    ];
+
+    var castMembers = shaka.cast.CastUtils.PlayerVoidMethods
+                          .concat(shaka.cast.CastUtils.PlayerGetterMethods)
+                          .concat(shaka.cast.CastUtils.PlayerPromiseMethods);
+    var playerMembers = Object.keys(shaka.Player.prototype).filter(
+        function(name) {
+          // Private members end with _.
+          return ignoredMembers.indexOf(name) < 0 &&
+              name.substr(name.length - 1) != '_';
+        });
+
+    // To make debugging easier, don't check that they are equal; instead check
+    // that neither has any extra entries.
+    var extraCastMembers = castMembers.filter(function(name) {
+      return playerMembers.indexOf(name) < 0;
+    });
+    var extraPlayerMembers = castMembers.filter(function(name) {
+      return castMembers.indexOf(name) < 0;
+    });
+    expect(extraCastMembers).toEqual([]);
+    expect(extraPlayerMembers).toEqual([]);
+  });
+
   describe('serialize/deserialize', function() {
     it('transfers infinite values and NaN', function() {
       var orig = {
@@ -142,13 +180,15 @@ describe('CastUtils', function() {
       var eventManager;
       var mediaSourceEngine;
 
-      beforeAll(function(done) {
-        // The TimeRanges constructor cannot be used directly, so we load a clip
-        // to get ranges to use.
+      beforeAll(function() {
         video = /** @type {HTMLMediaElement} */(
             document.createElement('video'));
         document.body.appendChild(video);
+      });
 
+      beforeEach(function(done) {
+        // The TimeRanges constructor cannot be used directly, so we load a clip
+        // to get ranges to use.
         var mediaSource = new MediaSource();
         var mimeType = 'video/mp4; codecs="avc1.42c01e"';
         var initSegmentUrl = '/base/test/test/assets/sintel-video-init.mp4';
@@ -165,23 +205,42 @@ describe('CastUtils', function() {
         }
 
         function onSourceOpen() {
+          var ContentType = shaka.util.ManifestParserUtils.ContentType;
+          eventManager.unlisten(mediaSource, 'sourceopen');
           mediaSourceEngine = new shaka.media.MediaSourceEngine(
               video, mediaSource, /* TextTrack */ null);
 
-          mediaSourceEngine.init({'video': mimeType}, false);
+          // Create empty object first and initialize the fields through
+          // [] to allow field names to be expressions.
+          var initObject = {};
+          initObject[ContentType.VIDEO] = mimeType;
+          mediaSourceEngine.init(initObject);
           shaka.test.Util.fetch(initSegmentUrl).then(function(data) {
-            return mediaSourceEngine.appendBuffer('video', data, null, null);
+            return mediaSourceEngine.appendBuffer(ContentType.VIDEO, data,
+                                                  null, null);
           }).then(function() {
             return shaka.test.Util.fetch(videoSegmentUrl);
           }).then(function(data) {
-            return mediaSourceEngine.appendBuffer('video', data, null, null);
+            return mediaSourceEngine.appendBuffer(ContentType.VIDEO, data,
+                                                  null, null);
           }).catch(fail).then(done);
         }
       });
 
+      afterEach(function(done) {
+        eventManager.destroy().then(function() {
+          if (mediaSourceEngine) {
+            return mediaSourceEngine.destroy();
+          }
+        }).then(function() {
+          video.removeAttribute('src');
+          video.load();
+          done();
+        });
+      });
+
       afterAll(function() {
-        eventManager.destroy();
-        if (mediaSourceEngine) mediaSourceEngine.destroy();
+        document.body.removeChild(video);
       });
 
       it('deserialize into equivalent objects', function() {

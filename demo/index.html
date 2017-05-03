@@ -55,7 +55,7 @@
            adaptive video streaming.</p>
 
         <p>Choose an asset and tap <strong>Load</strong>.
-           (On Android, you'll also need to press the play button on the
+           (On Android, you may also need to press the play button on the
             video.)</p>
 
         <p class="links">
@@ -90,9 +90,7 @@
         <a id="errorDisplayLink" href="#"></a>
       </div>
       <div id="videoContainer" class="overlay-parent">
-        <video id="video"
-               poster="//shaka-player-demo.appspot.com/assets/poster.jpg"
-               autoplay></video>
+        <video id="video" autoplay></video>
         <div id="giantPlayButtonContainer" class="overlay">
           <button id="giantPlayButton" class="material-icons">play_arrow</button>
         </div>
@@ -143,21 +141,39 @@
           <input id="enableAdaptation" type="checkbox" checked>
         </div>
         <div>
+          <label for="enableAutoplay">Autoplay:</label>
+          <input id="enableAutoplay" type="checkbox">
+        </div>
+        <div>
           <label for="logToScreen">Log to the screen:</label>
           <input id="logToScreen" type="checkbox">
+        </div>
+        <div id="logLevelListDiv" hidden>
+          <label for="logLevelList">Log Level:</label>
+          <select id="logLevelList" class="flex-grow">
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+            <option value="v">Verbose</option>
+            <option value="vv">Very Verbose</option>
+          </select>
         </div>
       </details>
 
       <details class="input">
         <summary>Info</summary>
         <div class="flex">
-          <label for="videoTracks">Video tracks:</label>
-          <select id="videoTracks" class="flex-grow"></select>
+          <label for="audioLanguages">Audio languages:</label>
+          <select id="audioLanguages" class="flex-grow"></select>
         </div>
 
         <div class="flex">
-          <label for="audioTracks">Audio tracks:</label>
-          <select id="audioTracks" class="flex-grow"></select>
+          <label for="variantTracks">Video+audio track combinations:</label>
+          <select id="variantTracks" class="flex-grow"></select>
+        </div>
+
+        <div class="flex">
+          <label for="textLanguages">Text languages:</label>
+          <select id="textLanguages" class="flex-grow"></select>
         </div>
 
         <div class="flex">

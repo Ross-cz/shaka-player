@@ -126,12 +126,25 @@ ShakaReceiver.prototype.checkIdle_ = function() {
   } else {
     this.idle_.style.display = 'none';
     this.cancelIdleTimer_();
+
+    // Audio-only tracks have no width/height.
+    var videoTracks =
+        this.player_.getVariantTracks().filter(function(t) { return t.width; });
+
+    // Style the video element differently for audio-only assets.
+    if (videoTracks.length == 0) {
+      this.video_.classList.add('audioOnly');
+    } else {
+      this.video_.classList.remove('audioOnly');
+    }
   }
 };
 
 
 /** @private */
 ShakaReceiver.prototype.startIdleTimer_ = function() {
+  this.cancelIdleTimer_();
+
   this.idleTimerId_ = window.setTimeout(
       window.close.bind(window), this.idleTimeout_ * 1000.0);
 };
